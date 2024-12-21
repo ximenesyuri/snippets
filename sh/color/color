@@ -1,0 +1,148 @@
+#!/bin/bash
+
+function color() {
+    declare -A color_groups=(
+        [black]="0 8 232 233 234 235 236 237 238 239"
+        [red]="1 9 52 88 124 160 196 202 203 204 205"
+        [green]="2 10 22 28 34 40 46 82 118 154 190"
+        [yellow]="3 11 58 64 70 76 82 112 148 184 220 226 227 228 229"
+        [blue]="4 12 17 18 19 20 21 25 26 27 32 33 39 45 51 87 123 159 195 231"
+        [magenta]="5 13 53 89 125 161 197 199 200 201 206 207"
+        [cyan]="6 14 23 29 35 41 47 83 119 155 191"
+        [white]="7 15 244 245 246 247 248 249 250 251 252 253 254 255"
+    )
+
+    styles=("bold" "italic" "underline")
+    declare -A style_codes=(["bold"]="1" ["italic"]="3" ["underline"]="4")
+
+    function style_to_code() {
+        local styles=($@)
+        local style_code=""
+        for s in "${styles[@]}"; do
+            [[ -n "${style_codes[$s]}" ]] && style_code="${style_code}${style_codes[$s]};"
+        done
+        echo "$style_code"
+    }
+
+    function display_color() {
+        local mode="$1"
+        local code="$2"
+        local type="$3"
+        printf "\e[${mode}${type};5;${code}m %3d \e[0m" "$code"
+    }
+
+    function parse_rgb() {
+        local input="$1"
+        if [[ $input =~ \(([0-9]+),[[:space:]]*([0-9]+),[[:space:]]*([0-9]+)\) ]]; then
+            echo "${BASH_REMATCH[1]},${BASH_REMATCH[2]},${BASH_REMATCH[3]}"
+        elif [[ $input =~ ^#?([A-Fa-f0-9]{6})$ ]]; then
+            local hex="${BASH_REMATCH[1]}"
+            r=$((16#${hex:0:2}))
+            g=$((16#${hex:2:2}))
+            b=$((16#${hex:4:2}))
+            echo "$r,$g,$b"
+        else
+            return 1
+        fi
+        return 0
+    }
+
+    function display_ansi_code() {
+        local style_code="$1"
+        local r="$2"
+        local g="$3"
+        local b="$4"
+        shift 4
+        local text="${1:-Text}"
+        local ansi_code="\e[${style_code}38;2;${r};${g};${b}m${text}\e[0m"         
+        if command -v xsel &> /dev/null; then
+            echo -n "$ansi_code" | xsel --clipboard
+        elif command -v xclip &> /dev/null; then
+            echo -n "$ansi_code" | xclip -selection clipboard
+        fi 
+            echo "ANSI Code: $ansi_code"
+    }
+
+
+    if [[ $# -eq 0 || $1 == "help" || $1 == "--help" ]]; then
+        cat << EOF
+
+USAGE 
+   color [color] [syle]
+   color all [number] [fg/bg]
+   color ansi [color] [text]
+
+OPTIONS
+    [color] [style] ........... Prints the [color] in the given [style] in fg and bg
+    all  [number] [fg/bg] ..... Displays the first [number] of the 256 colors fg/bg
+    ansi [color] [text] ....... Show ANSI code for [text] in [color] and copy to clipboard
+    help, --help .............. Prints this help message
+
+VALUES
+    [color] ................... Hexadecimal ["#color"] or RGB ["(r,g,b)"]
+    [style] ................... bold, italic, underline
+
+EXAMPLES
+    color red bold      
+    color "(255,0,0)" bold
+    color r=255 bold
+    color "#123456"
+    color 123456
+    color all 50 bg             
+    color ansi "#123456" "some text"
+
+EOF
+        return
+    fi
+
+    local input="$1"
+    local style=""
+    local fg_or_bg="38"
+
+    if [[ " ${styles[*]} " =~ " $1 " ]]; then
+        style=$1
+        shift
+        input="$1"
+    fi
+
+    if [[ $input == "all" ]]; then
+        local max=$2
+        if [[ $max =~ ^[0-9]+$ && $max -ge 0 && $max -le 255 ]]; then
+            [[ $3 == "bg" ]] && fg_or_bg="48"
+
+            for group in "${!color_groups[@]}"; do
+                echo "${group^} tones:"
+                for code in ${color_groups[$group]}; do
+                    [[ $code -le $max ]] && display_color "" "$code" "$fg_or_bg"
+                done
+                echo ""
+            done
+        else
+            echo "Provide a valid numeric range (0-255)."
+        fi
+    elif [[ $input == "ansi" ]]; then
+        shift
+        if [[ -n $(parse_rgb "$1") ]]; then
+            IFS=',' read -r r g b <<< "$(parse_rgb "$1")"
+            shift
+            display_ansi_code "$(style_to_code "$1")" "$r" "$g" "$b" "$@"
+        else
+            echo "Provide a valid color format for ansi option."
+        fi
+    else
+        if [[ -n "${color_groups[$input]}" ]]; then
+            local color_code="${color_groups[$input]%% *}"
+            display_color "$(style_to_code "$style")" "$color_code" "38"
+            display_color "$(style_to_code "$style")" "$color_code" "48"
+            echo ""
+        elif parse_rgb "$input"; then
+            IFS=',' read -r r g b <<< "$(parse_rgb "$input")"
+            display_color "$(style_to_code "$style")" "$((r*36 + g*6 + b + 16))" "38"
+            display_color "$(style_to_code "$style")" "$((r*36 + g*6 + b + 16))" "48"
+            echo ""
+        else
+            echo "Invalid color format. Please use color names, RGB, or HEX."
+        fi
+    fi
+}
+

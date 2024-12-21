@@ -1,0 +1,26 @@
+#! /bin/bash
+
+function include() {
+
+    function def() {
+        local name="$1"
+        local path="${INCLUDES[$name]}"
+
+        if [[ ! -f "$path" || ! -s "$path" ]]; then
+            echo "Error: File at '$path' does not exist or is empty. Function '$name' not defined."
+            return
+        fi
+        eval "function $name() { source \"$path\" && $name \"\$@\"; }"
+    }
+
+    if [[ "$1" == "*" ]]; then
+        include_all="true"
+    fi
+
+    for name in "${!INCLUDES[@]}"; do
+        if [[ $include_all == "true" ]] ||
+           [[ " $@ " =~ " $name " ]]; then
+            def "$name"
+        fi
+    done
+}
