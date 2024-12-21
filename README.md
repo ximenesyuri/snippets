@@ -14,3 +14,11 @@ Just clone this repo and source in the `.bashrc` the script you want to use.
 4. [menu](./sh/menu): generate interactive menus with pure shell
 5. [gif](./sh/gif): record the screen to a `.gif` file using only basic CLI tools
 6. [include](./sh/include): easily define local and global sources in your `.bashrc`
+
+# Criteria
+
+The criteria I used to put something here rather than in a separated project is the following:
+1. single file script with at most one or two auxiliary functions
+2. is not yaml/json configurable
+
+
