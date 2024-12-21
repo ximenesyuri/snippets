@@ -1,0 +1,77 @@
+#! /bin/bash
+
+function input {
+    function editor_ {
+        local file="$1"
+
+        local editor="${EDITOR:-$(command -v vim || echo "error: No suitable editor found.")}"
+        if [[ "$editor" == "error:"* ]]; then
+            echo "$editor"
+            return 1
+        fi
+
+        "$editor" "$file"
+    }
+
+    local prompt="> "
+    local extension="txt"
+    local var="_input"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -p|--prompt)
+                prompt="$2"
+                shift 2
+                ;;
+            -e|--ext|--extension)
+                extension="$2"
+                shift 2
+                ;;
+            -v|--var)
+                var="$2"
+                shift 2
+                ;;
+            *)
+                echo "Unknown option: $1"
+                return 1
+                ;;
+        esac
+    done
+
+    local tmp_file
+    tmp_file="$(mktemp --suffix=.$extension)"
+    local input=""
+
+    exec 3<&0
+    exec < /dev/tty
+
+    echo -n "$prompt"
+
+    while IFS= read -r -s -n1 char; do
+        case "$char" in
+            $'\t'|$'\t')
+                if ! editor_ "$tmp_file"; then
+                    return 1
+                fi
+                input=$(<"$tmp_file")
+                rm -f "$tmp_file"
+                cd - > /dev/null
+                break
+                ;;
+            '')
+                echo
+                break
+                ;;
+            $' ')
+                read -r -n2
+                ;;
+            *)
+                echo -n "$char"
+                input+="$char"
+                ;;
+        esac
+    done
+
+    exec 0<&3 3<&-
+    declare -g "$var"="$input"
+}
