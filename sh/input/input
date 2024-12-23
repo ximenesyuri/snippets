@@ -1,3 +1,5 @@
+#! /bin/bash
+
 function input_ {
     function editor_ {
         local file="$1"
@@ -43,6 +45,7 @@ function input_ {
     exec 3<&0
     exec < /dev/tty
 
+    trap "" SIGINT SIGTSTP # do nothing with Ctrl+C (SIGINT) and Ctrl+Z (SIGTSTP)
     stty -echo
     echo -n "$prompt"
 
@@ -69,6 +72,12 @@ function input_ {
                     input="${input%?}"
                     echo -ne "\b \b"
                 fi
+                ;;
+            $'\x1b'|$'\x04') # ESC and Ctrl+D
+                echo
+                stty echo
+                exec 0<&3 3<&-
+                return 0
                 ;;
             *)
                 input+="$char"
