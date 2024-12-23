@@ -1,0 +1,62 @@
+#! /bin/bash
+
+function domain(){
+    if [ $# -ne 1 ]; then
+        echo "Usage: domain [somedomain.tld | .tld | somedomain]"
+        exit 1
+    fi
+
+    check_domain_registered() {
+        local domain="$1"
+
+        if whois "$domain" | grep -q "No match\|NOT FOUND\|status: available"; then
+            echo "The domain $domain is not registered."
+        else
+            echo "The domain $domain is already registered."
+            whois "$domain"
+        fi
+    }
+
+    check_tld_accessible() {
+        
+        local response=$(whois -h whois.iana.org "$1")
+        
+        if echo "$response" | grep "This query returned 0 objects"; then
+            echo "The TLD .$1 is not recognized."
+        else
+            echo "The TLD .$1 was recognized."
+        fi
+    }
+
+    list_available_tlds() {
+        local domain="$1"
+        local available_tlds=()
+
+        local tlds=("com" "net" "org" "info" "biz")
+
+        for tld in "${tlds[@]}"; do
+            if ! whois "${domain}.${tld}" | grep -qi "Domain Name: ${domain}.${tld}"; then
+                available_tlds+=("${tld}")
+            fi
+        done
+
+        if [ ${#available_tlds[@]} -eq 0 ]; then
+            echo "No available TLDs found for the domain $domain."
+        else
+            echo "Available TLDs for $domain: ${available_tlds[@]/#/.}"
+        fi
+    }
+
+    input="$1"
+
+    if [[ "$input" == *.* ]]; then
+        if [[ "$input" == \.* ]]; then
+            check_tld_accessible "$input"
+        else
+            check_domain_registered "$input"
+        fi
+    else
+        list_available_tlds "$input"
+    fi
+
+}
