@@ -1,10 +1,8 @@
-#! /bin/bash
-
-function input {
+function input_ {
     function editor_ {
         local file="$1"
 
-        local editor="${EDITOR:-$(command -v vim || echo "error: No suitable editor found.")}"
+        local editor="${EDITOR:-$(command -v vim || echo 'error: No suitable editor found.')}"
         if [[ "$editor" == "error:"* ]]; then
             echo "$editor"
             return 1
@@ -45,12 +43,16 @@ function input {
     exec 3<&0
     exec < /dev/tty
 
+    stty -echo
     echo -n "$prompt"
 
-    while IFS= read -r -s -n1 char; do
+    while true; do
+        IFS= read -r -s -n1 char
         case "$char" in
-            $'\t'|$'\t')
+            $'\t'|$'\x09')
+                stty echo
                 if ! editor_ "$tmp_file"; then
+                    rm -f "$tmp_file"
                     return 1
                 fi
                 input=$(<"$tmp_file")
@@ -62,16 +64,20 @@ function input {
                 echo
                 break
                 ;;
-            $' ')
-                read -r -n2
+            $'\x08'|$'\x7f')
+                if [ -n "$input" ]; then
+                    input="${input%?}"
+                    echo -ne "\b \b"
+                fi
                 ;;
             *)
-                echo -n "$char"
                 input+="$char"
+                echo -n "$char"
                 ;;
         esac
     done
 
+    stty echo
     exec 0<&3 3<&-
     declare -g "$var"="$input"
 }
