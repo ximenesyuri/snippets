@@ -1,0 +1,11 @@
+#! /bin/bash
+
+function is_hex_ {
+    local color="$1"
+    if [[ $color =~ ^[0-9A-Fa-f]{6}$ ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
