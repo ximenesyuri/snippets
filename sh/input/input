@@ -41,6 +41,7 @@ function input_ {
     local tmp_file
     tmp_file="$(mktemp --suffix=.$extension)"
     local input=""
+    local cursor=0
 
     exec 3<&0
     exec < /dev/tty
@@ -59,6 +60,7 @@ function input_ {
                     return 1
                 fi
                 input=$(<"$tmp_file")
+                input=$(echo "$input" | jq -R -s .)
                 rm -f "$tmp_file"
                 cd - > /dev/null
                 break
@@ -68,20 +70,47 @@ function input_ {
                 break
                 ;;
             $'\x08'|$'\x7f')
-                if [ -n "$input" ]; then
-                    input="${input%?}"
+                if (( cursor > 0 )); then
+                    input="${input:0:cursor-1}${input:cursor}"
+                    ((cursor--))
                     echo -ne "\b \b"
                 fi
                 ;;
-            $'\x1b'|$'\x04') # ESC and Ctrl+D
+            $'\x1b')
+                read -r -s -n2 -t 0.1 rest
+                if [[ -z "$rest" ]]; then
+                    echo
+                    stty echo
+                    exec 0<&3 3<&-
+                    rm -f "$tmp_file"
+                    return 0
+                fi
+                if [[ "$rest" == "[C" ]]; then
+                    if (( cursor < ${#input} )); then
+                        ((cursor++))
+                        echo -ne "\e[C"
+                    fi
+                elif [[ "$rest" == "[D" ]]; then
+                    if (( cursor > 0 )); then
+                        ((cursor--))
+                        echo -ne "\e[D"
+                    fi
+                fi
+                ;;
+            $'\x04') # Ctrl+D
                 echo
                 stty echo
                 exec 0<&3 3<&-
+                rm -f "$tmp_file"
                 return 0
                 ;;
             *)
-                input+="$char"
-                echo -n "$char"
+                input="${input:0:cursor}$char${input:cursor}"
+                ((cursor++))
+                echo -ne "\r${prompt}${input} \r${prompt}"
+                for (( i=0; i<cursor; i++ )); do
+                    echo -ne "\e[C"
+                done
                 ;;
         esac
     done
@@ -90,3 +119,4 @@ function input_ {
     exec 0<&3 3<&-
     declare -g "$var"="$input"
 }
+
