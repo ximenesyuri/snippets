@@ -1,0 +1,36 @@
+#!/bin/bash
+
+TEXT_FILE="$(mktemp)"
+
+import -window $(xdotool getactivewindow) $SCREENSHOT_FILE
+
+SCREENSHOT_URL=$(imgur "$SCREENSHOT_FILE" | grep https://i.imgur)
+
+curl https://api.openai.com/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -d "{
+    \"model\": \"gpt-4o-mini\",
+    \"messages\": [
+      {
+        \"role\": \"user\",
+        \"content\": [
+          {
+            \"type\": \"text\",
+            \"text\": \"Extract the text from this terminal screen\"
+          },
+          {
+            \"type\": \"image_url\",
+            \"image_url\": {
+              \"url\": \"$SCREENSHOT_URL\"
+            }
+          }
+        ]
+      }
+    ],
+    \"max_tokens\": 1000
+  }"  | jq -r '.choices[0].message.content' > $TEXT_FILE
+
+vim $TEXT_FILE
+rm $TEXT_FILE
+

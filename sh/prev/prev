@@ -1,0 +1,16 @@
+#! /bin/bash
+
+function _prev(){
+    if [[ -z "$1" ]]; then
+        echo "${COMP_WORDS[COMP_CWORD-1]}"
+    elif [[ $1 -eq 0 ]]; then
+        echo "${COMP_WORDS[COMP_CWORD]}"
+    elif [[ $1 -gt 0 ]]; then
+        echo "${COMP_WORDS[COMP_CWORD-$1]}"
+    elif [[ $1 -lt 0 ]]; then
+        echo "${COMP_WORDS[COMP_CWORD+$1]}"
+    else
+        echo "error: wrong entry for 'prev()'"
+    fi
+}
+
