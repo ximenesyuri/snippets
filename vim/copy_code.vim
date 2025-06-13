@@ -1,5 +1,6 @@
 " Author: Yuri Ximenes
-" Description: copy last code block
+" Contact: ximenesyuri@gmx.ie
+" Description: copy last code block in the form ```<lang> for some language.
 
 function! s:copy_last_code_block()
     let l:save_pos = getpos('.')
