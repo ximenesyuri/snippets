@@ -1,0 +1,150 @@
+#! /bin/bash
+
+mnt() {
+    _mnt_list_mountpoints() {
+        lsblk --json -o NAME,PATH,TYPE,MOUNTPOINTS | jq -r --arg HOME "$HOME" '
+            .blockdevices[] as $dev
+            | ([$dev] + ($dev.children // []))
+            | .[]
+            | select(.type == "part" or .type == "disk")
+            | select(has("mountpoints") and (.mountpoints | type == "array"))
+            | . as $part
+            | $part.mountpoints[]?
+            | select(type=="string" and (. | startswith("/mnt/") or startswith("/media/") or startswith($HOME)))
+            | [ ($part.path // ("/dev/" + $part.name)), . ] | @tsv
+        '
+    }
+
+    _mnt_inserted_partitions() {
+        lsblk --json -o NAME,PATH,RM,TYPE,MOUNTPOINTS | jq -r '
+            .blockdevices[] as $dev
+            | select($dev.rm == true)
+            | ([$dev] + ($dev.children // []))
+            | .[]
+            | select(.type == "part" or .type == "disk")
+            | select(has("mountpoints") and (.mountpoints | type == "array"))
+            | select((.mountpoints | length == 0) or all(.mountpoints[]; . == null or . == "" or type!="string"))
+            | .path // ("/dev/" + .name)
+        '
+    }
+
+    _mnt_default_mountpoint() {
+        local disk="$1"
+        echo "/mnt/$(basename "$disk")"
+    }
+
+    local cmd="$1"
+    shift
+
+    case "$cmd" in
+        list)
+            echo "User mountpoints (device [tab] mountpoint):"
+            _mnt_list_mountpoints
+            ;;
+        new)
+            local disk="$1"
+            local dir="$2"
+
+            if [[ -z "$disk" ]]; then
+                echo "Available removable partitions/disks to be mounted:"
+                _mnt_inserted_partitions
+                return 0
+            fi
+
+            if [[ -z "$dir" ]]; then
+                dir=$(_mnt_default_mountpoint "$disk")
+            fi
+
+            if [[ ! -d "$dir" ]]; then
+                echo "Creating directory $dir"
+                sudo mkdir -p "$dir"
+            fi
+            echo "Mounting $disk to $dir"
+            sudo mount "$disk" "$dir"
+            ;;
+        rm)
+            local arg="$1"
+            if [[ -z "$arg" ]]; then
+                echo "Specify a device or user mountpoint to unmount."
+                return 1
+            fi
+            local info_list mp device
+            info_list=$(_mnt_list_mountpoints)
+            while read -r device mp; do
+                if [[ "$arg" == "$device" || "$arg" == "$mp" ]]; then
+                    echo "Unmounting $mp"
+                    sudo umount "$mp"
+                    return $?
+                fi
+            done <<< "$info_list"
+            echo "Could not determine what to unmount for: $arg"
+            return 1
+            ;;
+        "")
+            echo "Usage: mnt {list|new|rm} ..."
+            ;;
+        *)
+            echo "Unknown command: $cmd"
+            ;;
+    esac
+}
+
+_mnt_complete() {
+    local cur prev first
+    COMPREPLY=()
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+    first="${COMP_WORDS[1]}"
+
+    if [[ $COMP_CWORD -eq 1 ]]; then
+        COMPREPLY=( $(compgen -W "list new rm" -- "$cur") )
+        return 0
+    fi
+
+    case "$first" in
+        new)
+            if [[ $COMP_CWORD -eq 2 ]]; then
+                local parts=$(lsblk --json -o NAME,PATH,RM,TYPE,MOUNTPOINTS | jq -r '
+                    .blockdevices[] as $dev
+                    | select($dev.rm == true)
+                    | ([$dev] + ($dev.children // []))
+                    | .[]
+                    | select(.type == "part" or .type == "disk")
+                    | select(has("mountpoints") and (.mountpoints | type == "array"))
+                    | select((.mountpoints | length == 0) or all(.mountpoints[]; . == null or . == "" or type!="string"))
+                    | .path // ("/dev/" + .name)
+                ')
+                COMPREPLY=( $(compgen -W "$parts" -- "$cur") )
+                return 0
+            elif [[ $COMP_CWORD -eq 3 ]]; then
+                COMPREPLY=( $(compgen -d -- "$cur") )
+                return 0
+            fi
+            ;;
+        rm)
+            if [[ $COMP_CWORD -eq 2 ]]; then
+                local info_list=$(lsblk --json -o NAME,PATH,TYPE,MOUNTPOINTS | jq -r --arg HOME "$HOME" '
+                    .blockdevices[] as $dev
+                    | ([$dev] + ($dev.children // []))
+                    | .[]
+                    | select(.type == "part" or .type == "disk")
+                    | select(has("mountpoints") and (.mountpoints | type == "array"))
+                    | . as $part
+                    | $part.mountpoints[]?
+                    | select(type=="string" and (. | startswith("/mnt/") or startswith("/media/") or startswith($HOME)))
+                    | [ ($part.path // ("/dev/" + $part.name)), . ] | @tsv
+                ')
+                local devs points
+                devs=$(echo "$info_list" | awk '{print $1}')
+                points=$(echo "$info_list" | awk '{print $2}')
+                COMPREPLY=( $(compgen -W "$devs $points" -- "$cur") )
+                return 0
+            fi
+            ;;
+        list)
+            return 0
+            ;;
+    esac
+}
+complete -F _mnt_complete mnt
+

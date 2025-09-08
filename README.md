@@ -21,7 +21,3 @@ The dynamics involving the creation of these utilities is the following:
 2. I sketch it, do minor tests and put in this repository
 3. Anytime I want an improved or customized version of some util, I implement it in this repo, and then use the new version in some other project
 4. Eventually, if I decide to really improve the utility, it will be promoted to a project, being moved to its own repository.
-
-# Other
-
-For a list of third party utilities, see [utils](./utils.md).
