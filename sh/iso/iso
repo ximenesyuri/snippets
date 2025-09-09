@@ -1,0 +1,357 @@
+iso() {
+    set -e
+
+    # ARCH AUTODETECT
+    get_local_arch() {
+        local uname_arch
+        uname_arch="$(uname -m)"
+        case "$uname_arch" in
+            x86_64)
+                echo "amd64"
+                ;;
+            aarch64)
+                echo "arm64"
+                ;;
+            armv7l)
+                # For Ubuntu/Debian: armhf. For Alpine: armv7
+                case "$1" in
+                    alpine-linux|void-linux) echo "armv7" ;;
+                    *) echo "armhf" ;;
+                esac
+                ;;
+            i686|i386)
+                echo "i386"
+                ;;
+            armv6l)
+                echo "armhf"
+                ;;
+            *)
+                echo "$uname_arch"
+                ;;
+        esac
+    }
+
+    # -------- VERSION FETCHING HELPERS --------
+    ubuntu_versions()      { curl -sSL https://releases.ubuntu.com/ | grep -oP 'href="\K[0-9]{2}\.[0-9]{2}/' | cut -d/ -f1 | sort -uV; }
+    debian_versions()      { curl -sSL https://cdimage.debian.org/debian-cd/current/ | grep -oP 'href="\K[0-9]{1,2}\.[0-9]{1,2}/' | cut -d/ -f1 | sort -uV; }
+    arch_versions()        { curl -sSL https://archlinux.org/releng/releases/ | grep -oP 'Arch Linux \K[0-9]+\.[0-9]+\.[0-9]+' | sort -V; }
+    manjaro_versions()     { curl -sSL https://download.manjaro.org/gnome/ | grep -oP 'href="\K[0-9]{4}\.[0-9]{2}/' | cut -d/ -f1 | sort -uV; }
+    slackware_versions()   { curl -sSL https://mirrors.slackware.com/slackware/ | grep -oP 'href="\K[0-9]+\.[0-9]+/' | cut -d/ -f1 | sort -uV; }
+    void_versions()        { echo "rolling"; }
+    alpine_versions()      { curl -sSL https://dl-cdn.alpinelinux.org/alpine/ | grep -oE '[0-9]+\.[0-9]+\.[0-9]+/' | cut -d/ -f1 | sort -uV; }
+
+    # -------- DOWNLOADERS PER DISTRO --------
+    download_ubuntu() { # $1=flavor, $2=version, $3=arch
+        local flavor="$1"
+        local version="$2"
+        local arch="$3"
+
+        case "$flavor" in
+            ubuntu|xubuntu|lubuntu)
+                url="https://releases.ubuntu.com/${version}/${flavor}-${version}-desktop-${arch}.iso"
+                out="${flavor}-${version}-desktop-${arch}.iso"
+                ;;
+            ubuntu-server)
+                local base="https://releases.ubuntu.com/${version}/"
+                local patch=$(curl -sSL "$base" | grep -oP "ubuntu-${version}\\.\K[0-9]+(?=-live-server-${arch}\\.iso)" | sort -V | tail -1)
+                if [ -z "$patch" ]; then
+                    echo "Couldn't find a patch release for Ubuntu Server $version $arch"; exit 1
+                fi
+                url="${base}ubuntu-${version}.${patch}-live-server-${arch}.iso"
+                out="ubuntu-server-${version}.${patch}-live-server-${arch}.iso"
+                ;;
+        esac
+
+        echo "Downloading: $url"
+        wget -O "$out" --show-progress "$url"
+    }
+
+    download_debian() { # $1=version $2=arch
+        local version="$1"
+        local arch="$2"
+        local page="https://cdimage.debian.org/debian-cd/current/${arch}/iso-cd/"
+        local iso=$(curl -sSL "$page" | grep -oP "debian-${version}.*netinst\\.iso" | sort -V | tail -1)
+        if [ -z "$iso" ]; then
+            echo "Debian ISO not found for $version/$arch"
+            exit 1
+        fi
+        wget -O "$iso" "$page$iso"
+    }
+
+    download_arch_linux() { # $1=version $2=arch (arch must be x86_64)
+        local version="$1"
+        local arch="$2"
+        [ "$arch" != "x86_64" ] && { echo "Arch Linux only provides x86_64 ISO"; exit 1; }
+        local url="https://mirror.rackspace.com/archlinux/iso/${version}/archlinux-${version}-x86_64.iso"
+        wget -O "archlinux-${version}-x86_64.iso" "$url"
+    }
+
+    download_manjaro() { # $1=version $2=arch (only x86_64)
+        local version="$1"
+        local arch="$2"
+        [ "$arch" != "x86_64" ] && { echo "Manjaro official GNOME downloads are x86_64 only"; exit 1; }
+        local url="https://download.manjaro.org/gnome/$version/manjaro-gnome-$version-minimal-x86_64.iso"
+        wget -O "manjaro-gnome-${version}-x86_64.iso" "$url"
+    }
+
+    download_slackware() { # $1=version $2=arch (only x86_64)
+        local version="$1"
+        local arch="$2"
+        [ "$arch" != "x86_64" ] && { echo "Slackware64 only available for x86_64"; exit 1; }
+        local url="https://mirrors.slackware.com/slackware/slackware64-$version-iso/slackware64-$version-install-dvd.iso"
+        wget -O "slackware64-${version}-install-dvd.iso" "$url"
+    }
+
+    download_void_linux() { # $1=arch
+        local arch="$1"
+        # *You may want to add flavor detection or more automation here!*
+        local url="https://repo-default.voidlinux.org/live/current/void-live-${arch}-20230628.iso"
+        wget -O "void-linux-rolling-${arch}.iso" "$url"
+    }
+
+    download_alpine_linux() { # $1=version $2=arch
+        local version="$1"
+        local arch="$2"
+        local url="https://dl-cdn.alpinelinux.org/alpine/v${version}/releases/${arch}/alpine-standard-${version}-${arch}.iso"
+        wget -O "alpine-standard-${version}-${arch}.iso" "$url"
+    }
+
+    # ------------ BURNER ------------
+    list_disks() {
+        lsblk -dpno NAME,TYPE | awk '$2=="disk"{print $1}'
+    }
+
+    # ------------ MAIN LOGIC ------------
+    if [ "$1" = "get" ]; then
+        local distro="$2"
+        local version="" arch=""
+        shift 2
+        while (( "$#" )); do
+            case "$1" in
+                --version)
+                    version="$2"
+                    shift 2
+                    ;;
+                --architecture)
+                    arch="$2"
+                    shift 2
+                    ;;
+                *)
+                    shift
+                    ;;
+            esac
+        done
+
+        # AUTODETECT ARCH, MAP TO DISTRO
+        if [ -z "$arch" ]; then
+            case "$distro" in
+                ubuntu|ubuntu-server|lubuntu|xubuntu|debian)
+                    arch=$(get_local_arch "$distro")
+                    ;;
+                arch-linux|manjaro|slackware)
+                    case "$(uname -m)" in
+                        x86_64) arch="x86_64" ;;
+                        aarch64) arch="aarch64" ;;
+                        *) arch="$(uname -m)" ;;
+                    esac
+                    ;;
+                void-linux)
+                    case "$(uname -m)" in
+                        x86_64) arch="x86_64" ;;
+                        aarch64) arch="aarch64" ;;
+                        armv7l)  arch="armv7l" ;;
+                        i686)    arch="i686" ;;
+                        *) arch="$(uname -m)" ;;
+                    esac
+                    ;;
+                alpine-linux)
+                    case "$(uname -m)" in
+                        x86_64) arch="x86_64" ;;
+                        aarch64) arch="aarch64" ;;
+                        armv7l) arch="armv7" ;;
+                        armhf) arch="armhf" ;;
+                        i686|i386) arch="x86" ;;
+                        *) arch="$(uname -m)" ;;
+                    esac
+                    ;;
+                *)
+                    arch=$(get_local_arch "$distro")
+                    ;;
+            esac
+            echo "Autodetected architecture: $arch"
+        fi
+
+        case "$distro" in
+            ubuntu|ubuntu-server|xubuntu|lubuntu)
+                [ -z "$version" ] && version=$(ubuntu_versions | tail -1)
+                download_ubuntu "$distro" "$version" "$arch"
+                ;;
+            debian)
+                [ -z "$version" ] && version=$(debian_versions | tail -1)
+                download_debian "$version" "$arch"
+                ;;
+            arch-linux)
+                [ -z "$version" ] && version=$(arch_versions | tail -1)
+                download_arch_linux "$version" "$arch"
+                ;;
+            manjaro)
+                [ -z "$version" ] && version=$(manjaro_versions | tail -1)
+                download_manjaro "$version" "$arch"
+                ;;
+            slackware)
+                [ -z "$version" ] && version=$(slackware_versions | tail -1)
+                download_slackware "$version" "$arch"
+                ;;
+            void-linux)
+                download_void_linux "$arch"
+                ;;
+            alpine-linux)
+                [ -z "$version" ] && version=$(alpine_versions | tail -1)
+                download_alpine_linux "$version" "$arch"
+                ;;
+            *)
+                echo "Supported distros: ubuntu ubuntu-server xubuntu lubuntu debian arch-linux manjaro slackware void-linux alpine-linux"
+                return 1
+                ;;
+        esac
+
+    elif [ "$1" = "burn" ]; then
+        local iso_file="$2"
+        shift 2
+        local disk=""
+        while (( "$#" )); do
+            case "$1" in
+                --disk)
+                    disk="$2"
+                    shift 2
+                    ;;
+                *)
+                    shift
+                    ;;
+            esac
+        done
+        if [ ! -f "$iso_file" ]; then
+            echo "ISO file not found: $iso_file"
+            return 1
+        fi
+        if [ -z "$disk" ]; then
+            echo "--disk argument required."
+            return 1
+        fi
+        echo "About to BURN $iso_file to $disk"
+        echo "ALL DATA ON $disk WILL BE ERASED!"
+        read -p "Continue? [y/N]: " CONFIRM
+        if [[ "$CONFIRM" != "y" && "$CONFIRM" != "Y" ]]; then
+            echo "Cancelled."
+            return 1
+        fi
+        sudo dd if="$iso_file" of="$disk" bs=4M status=progress conv=fsync
+        echo "Done. $iso_file burned to $disk"
+    else
+        echo "Usage:"
+        echo "  iso get <distro> [--version <version>] [--architecture <arch>]"
+        echo "  iso burn <iso_file> --disk <disk>"
+        return 1
+    fi
+}
+
+_iso_complete() {
+    local cur prev
+    COMPREPLY=()
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+
+    local distros="ubuntu ubuntu-server xubuntu lubuntu debian arch-linux manjaro slackware void-linux alpine-linux"
+    local ubuntu_arches="amd64 arm64"
+    local debian_arches="amd64 arm64 i386 armhf"
+    local arch_arches="x86_64"
+    local manjaro_arches="x86_64"
+    local slackware_arches="x86_64"
+    local void_arches="x86_64 aarch64 armv7l i686"
+    local alpine_arches="x86_64 aarch64 armhf armv7 x86"
+
+    if [ $COMP_CWORD -eq 1 ]; then
+        COMPREPLY=( $(compgen -W "get burn" -- "$cur") )
+        return 0
+    fi
+
+    if [ "${COMP_WORDS[1]}" = "get" ]; then
+        if [ $COMP_CWORD -eq 2 ]; then
+            COMPREPLY=( $(compgen -W "$distros" -- "$cur") )
+            return 0
+        fi
+        if [ $COMP_CWORD -eq 3 ]; then
+            COMPREPLY=( $(compgen -W "--version --architecture" -- "$cur") )
+            return 0
+        fi
+        if [ $COMP_CWORD -eq 4 ] && [ "${COMP_WORDS[3]}" = "--version" ]; then
+            local distro="${COMP_WORDS[2]}"
+            case "$distro" in
+                ubuntu|ubuntu-server|xubuntu|lubuntu)
+                    mapfile -t vers < <(curl -sSL https://releases.ubuntu.com/ | grep -oP 'href="\K[0-9]{2}\.[0-9]{2}/' | cut -d/ -f1 | sort -uV)
+                    ;;
+                debian)
+                    mapfile -t vers < <(curl -sSL https://cdimage.debian.org/debian-cd/current/ | grep -oP 'href="\K[0-9]{1,2}\.[0-9]{1,2}/' | cut -d/ -f1 | sort -uV)
+                    ;;
+                arch-linux)
+                    mapfile -t vers < <(curl -sSL https://archlinux.org/releng/releases/ | grep -oP 'Arch Linux \K[0-9]+\.[0-9]+\.[0-9]+' | sort -V)
+                    ;;
+                manjaro)
+                    mapfile -t vers < <(curl -sSL https://download.manjaro.org/gnome/ | grep -oP 'href="\K[0-9]{4}\.[0-9]{2}/' | cut -d/ -f1 | sort -uV)
+                    ;;
+                slackware)
+                    mapfile -t vers < <(curl -sSL https://mirrors.slackware.com/slackware/ | grep -oP 'href="\K[0-9]+\.[0-9]+/' | cut -d/ -f1 | sort -uV)
+                    ;;
+                void-linux)
+                    vers=("rolling")
+                    ;;
+                alpine-linux)
+                    mapfile -t vers < <(curl -sSL https://dl-cdn.alpinelinux.org/alpine/ | grep -oE '[0-9]+\.[0-9]+\.[0-9]+/' | cut -d/ -f1 | sort -uV)
+                    ;;
+                *)
+                    vers=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${vers[*]}" -- "$cur") )
+            return 0
+        fi
+        if [ $COMP_CWORD -eq 4 ] && [ "${COMP_WORDS[3]}" = "--architecture" ]; then
+            local distro="${COMP_WORDS[2]}"
+            local arches=""
+            case "$distro" in
+                ubuntu|ubuntu-server|xubuntu|lubuntu) arches="$ubuntu_arches" ;;
+                debian) arches="$debian_arches" ;;
+                arch-linux) arches="$arch_arches" ;;
+                manjaro) arches="$manjaro_arches" ;;
+                slackware) arches="$slackware_arches" ;;
+                void-linux) arches="$void_arches" ;;
+                alpine-linux) arches="$alpine_arches" ;;
+                *) arches="" ;;
+            esac
+            COMPREPLY=( $(compgen -W "$arches" -- "$cur") )
+            return 0
+        fi
+    fi
+
+    if [ "${COMP_WORDS[1]}" = "burn" ]; then
+        if [ $COMP_CWORD -eq 2 ]; then
+            for file in ./*.iso; do
+                [ -e "$file" ] && COMPREPLY+=( "$(basename "$file")" )
+            done
+            COMPREPLY=( $(compgen -W "${COMPREPLY[*]}" -- "$cur") )
+            return 0
+        fi
+        if [ $COMP_CWORD -eq 3 ]; then
+            if [[ "$cur" == --* ]]; then
+                COMPREPLY=( $(compgen -W "--disk" -- "$cur") )
+            fi
+            return 0
+        fi
+        if [ $COMP_CWORD -eq 4 ] && [[ "${COMP_WORDS[3]}" == "--disk" ]]; then
+            mapfile -t disks < <(lsblk -dpno NAME,TYPE 2>/dev/null | awk '$2=="disk"{print $1}')
+            COMPREPLY=( $(compgen -W "${disks[*]}" -- "$cur") )
+            return 0
+        fi
+    fi
+}
+complete -F _iso_complete iso
