@@ -1,0 +1,385 @@
+#!/bin/bash
+
+pm() {
+    if ! command -v fzf &> /dev/null; then
+        echo "error: 'fzf' is not installed." >&2
+        return 1
+    fi
+
+    get_package_manager() {
+        if [[ -n "$PM_MANAGER" ]]; then
+            echo "$PM_MANAGER"
+        else
+            if command -v apt &> /dev/null; then
+                echo "apt"
+            elif command -v pacman &> /dev/null; then
+                echo "pacman"
+            elif command -v dnf &> /dev/null; then
+                echo "dnf"
+            elif command -v yum &> /dev/null; then
+                echo "yum"
+            elif command -v zypper &> /dev/null; then
+                echo "zypper"
+            else
+                echo "error: Unsupported package manager or not detected." >&2
+                return 1
+            fi
+        fi
+    }
+
+    declare -A PM_ACTIONS
+
+    # --- APT Actions ---
+    PM_ACTIONS[apt,install]="sudo apt install -y"
+    PM_ACTIONS[apt,uninstall]="sudo apt remove -y"
+    PM_ACTIONS[apt,update]="sudo apt upgrade -y"
+    PM_ACTIONS[apt,fetch]="sudo apt update"
+    PM_ACTIONS[apt,clean]="sudo apt autoclean"
+    PM_ACTIONS[apt,list]="dpkg --get-selections | grep -v deinstall"
+    PM_ACTIONS[apt,info]="apt show"
+    PM_ACTIONS[apt,prune]="sudo apt autoremove -y"
+
+    # --- Pacman Actions ---
+    PM_ACTIONS[pacman,install]="sudo pacman -S --noconfirm"
+    PM_ACTIONS[pacman,uninstall]="sudo pacman -Rns --noconfirm"
+    PM_ACTIONS[pacman,update]="sudo pacman -Syu --noconfirm"
+    PM_ACTIONS[pacman,fetch]="sudo pacman -Sy"
+    PM_ACTIONS[pacman,clean]="sudo pacman -Scc --noconfirm"
+    PM_ACTIONS[pacman,list]="pacman -Q"
+    PM_ACTIONS[pacman,info]="pacman -Qi"
+    PM_ACTIONS[pacman,prune]="sudo pacman -Rns"
+
+    # --- DNF Actions ---
+    PM_ACTIONS[dnf,install]="sudo dnf install -y"
+    PM_ACTIONS[dnf,uninstall]="sudo dnf remove -y"
+    PM_ACTIONS[dnf,update]="sudo dnf upgrade -y"
+    PM_ACTIONS[dnf,fetch]="sudo dnf makecache"
+    PM_ACTIONS[dnf,clean]="sudo dnf clean all"
+    PM_ACTIONS[dnf,list]="dnf list installed"
+    PM_ACTIONS[dnf,info]="dnf info"
+    PM_ACTIONS[dnf,prune]="sudo dnf autoremove -y"
+
+    # --- YUM Actions ---
+    PM_ACTIONS[yum,install]="sudo yum install -y"
+    PM_ACTIONS[yum,uninstall]="sudo yum remove -y"
+    PM_ACTIONS[yum,update]="sudo yum update -y"
+    PM_ACTIONS[yum,fetch]="sudo yum makecache"
+    PM_ACTIONS[yum,clean]="sudo yum clean all"
+    PM_ACTIONS[yum,list]="yum list installed"
+    PM_ACTIONS[yum,info]="yum info"
+    PM_ACTIONS[yum,prune]="sudo yum autoremove -y"
+
+    # --- Zypper Actions ---
+    PM_ACTIONS[zypper,install]="sudo zypper install -y"
+    PM_ACTIONS[zypper,uninstall]="sudo zypper remove -y"
+    PM_ACTIONS[zypper,update]="sudo zypper update -y"
+    PM_ACTIONS[zypper,fetch]="sudo zypper refresh"
+    PM_ACTIONS[zypper,clean]="sudo zypper clean"
+    PM_ACTIONS[zypper,list]="zypper packages --installed-only"
+    PM_ACTIONS[zypper,info]="zypper info"
+    PM_ACTIONS[zypper,prune]="sudo zypper purge-kernels -y"
+
+    declare -A PM_ACTION_ALIASES
+    PM_ACTION_ALIASES[i]="install"
+    PM_ACTION_ALIASES[install]="install"
+    PM_ACTION_ALIASES[u]="uninstall"
+    PM_ACTION_ALIASES[uninstall]="uninstall"
+    PM_ACTION_ALIASES[r]="uninstall"
+    PM_ACTION_ALIASES[rm]="uninstall"
+    PM_ACTION_ALIASES[remove]="uninstall"
+    PM_ACTION_ALIASES[U]="update"
+    PM_ACTION_ALIASES[up]="update"
+    PM_ACTION_ALIASES[update]="update"
+    PM_ACTION_ALIASES[f]="fetch"
+    PM_ACTION_ALIASES[fetch]="fetch"
+    PM_ACTION_ALIASES[c]="clean"
+    PM_ACTION_ALIASES[clean]="clean"
+    PM_ACTION_ALIASES[l]="list"
+    PM_ACTION_ALIASES[ls]="list"
+    PM_ACTION_ALIASES[list]="list"
+    PM_ACTION_ALIASES[I]="info"
+    PM_ACTION_ALIASES[info]="info"
+    PM_ACTION_ALIASES[p]="prune"
+    PM_ACTION_ALIASES[prune]="prune"
+
+    local PM
+    PM=$(get_package_manager) || return 1
+
+    function installed_packages() {
+        case "$PM" in
+            apt)
+                dpkg-query -f '${binary:Package}\n' -W 2>/dev/null | sort -u
+                ;;
+            pacman)
+                pacman -Qq 2>/dev/null | sort -u
+                ;;
+            dnf|yum)
+                rpm -qa --qf '%{NAME}\n' 2>/dev/null | sort -u
+                ;;
+            zypper)
+                zypper packages --installed-only --query-type=match-exact 2>/dev/null | awk 'NR>2 {print $3}' | sort -u
+                ;;
+        esac
+    }
+
+    function available_packages() {
+        case "$PM" in
+            apt)
+                comm -23 <(apt-cache dumpavail 2>/dev/null | awk '/^Package:/{print $2}' | sort -u) <(dpkg-query -f '${binary:Package}\n' -W 2>/dev/null | sort -u)
+                ;;
+            pacman)
+                comm -23 <(pacman -Slq 2>/dev/null | sort -u) <(pacman -Qq 2>/dev/null | sort -u)
+                ;;
+            dnf)
+                comm -23 <(dnf repoquery --available --qf '%{name}' 2>/dev/null | sort -u) <(rpm -qa --qf '%{NAME}\n' 2>/dev/null | sort -u)
+                ;;
+            yum)
+                comm -23 <(yum list available 2>/dev/null | awk 'NR>1 {print $1}' | sed 's/\..*$//' | sort -u) <(rpm -qa --qf '%{NAME}\n' 2>/dev/null | sort -u)
+                ;;
+            zypper)
+                comm -23 <(zypper search --uninstalled-only --no-refresh 2>/dev/null | awk 'NR>3 {print $3}' | sort -u) <(rpm -qa --qf '%{NAME}\n' 2>/dev/null | sort -u)
+                ;;
+        esac
+    }
+
+    function all_packages_fzf() {
+        {
+            installed_packages | sed 's/$/ [installed]/'
+            available_packages
+        } | sort -u
+    }
+
+    get_info() {
+        local package="$1"
+        if [[ -z "$package" ]]; then
+            echo "error: no package name provided." >&2
+            return 1
+        fi
+        case "$PM" in
+            apt)
+                apt-cache show "$package"
+                ;;
+            pacman)
+                pacman -Qi "$package" || pacman -Si "$package"
+                ;;
+            dnf|yum)
+                rpm -qi "$package" 2>/dev/null || dnf info "$package" || yum info "$package"
+                ;;
+            zypper)
+                rpm -qi "$package" 2>/dev/null || zypper info "$package"
+                ;;
+        esac
+    }
+
+    get_action_command() {
+        local action="$1"
+        local pm_type="$2"
+        local resolved_action="${PM_ACTION_ALIASES[$action]}"
+
+        if [[ -z "$resolved_action" ]]; then
+            echo "error: invalid action alias: '$action'" >&2
+            return 1
+        fi
+
+        if [[ -z "${PM_ACTIONS[$pm_type,$resolved_action]}" ]]; then
+            echo "error: action '$resolved_action' not defined for package manager '$pm_type'." >&2
+            return 1
+        fi
+
+        echo "${PM_ACTIONS[$pm_type,$resolved_action]}"
+    }
+
+    execute_action() {
+        local action_name="$1"
+        local package_args="$2"
+
+        local action_command
+        action_command=$(get_action_command "$action_name" "$PM")
+        if [[ $? -ne 0 ]]; then
+            return 1
+        fi
+
+        if [[ "$PM" == "pacman" && "$action_name" == "prune" ]]; then
+            local orphans
+            orphans=$(pacman -Qtdq 2>/dev/null)
+            if [[ -z "$orphans" ]]; then
+                echo "No orphaned packages found for Pacman."
+                return 0
+            fi
+            echo "Removing orphaned packages with Pacman: $orphans"
+            sudo pacman -Rns "$orphans" --noconfirm
+        else
+            echo "Executing: $action_command $package_args"
+            eval "$action_command $package_args"
+        fi
+    }
+
+    local action="${1:-}"
+    local package_name="${2:-}"
+
+    case "$action" in
+        i|install)
+            if [[ -n "$package_name" ]]; then
+                execute_action "install" "$package_name"
+            else
+                echo "Select package(s) to install:"
+                local packages=$(available_packages | fzf --multi )
+                if [[ $? -ne 0 || -z "$packages" ]]; then
+                    echo "No packages selected."
+                    return 1
+                fi
+                execute_action "install" "$packages"
+            fi
+            ;;
+        u|uninstall|r|rm|remove)
+            if [[ -n "$package_name" ]]; then
+                execute_action "uninstall" "$package_name"
+            else
+                echo "Select package(s) to uninstall:"
+                local packages=$(installed_packages | fzf --multi )
+                if [[ $? -ne 0 || -z "$packages" ]]; then
+                    echo "error: no packages selected."
+                    return 1
+                fi
+                execute_action "uninstall" "$packages"
+            fi
+            ;;
+        U|up|update)
+            if [[ -n "$package_name" ]]; then
+                execute_action "install" "$package_name"
+            else
+                echo "info: performing a system-wide update..."
+                execute_action "update" ""
+            fi
+            ;;
+        f|fetch)
+            echo "info: fetching package lists..."
+            execute_action "fetch" ""
+            ;;
+        c|clean)
+            echo "info: cleaning package caches..."
+            execute_action "clean" ""
+            ;;
+        l|ls|list)
+            shift
+            local list_type="${1:-}"
+            local fzf_selection=""
+
+            case "$list_type" in
+                i|installed)
+                    echo "Select an installed package to view its info:"
+                    fzf_selection=$(installed_packages | fzf --multi )
+                    ;;
+                a|available)
+                    echo "Select an available package to view its info:"
+                    fzf_selection=$(available_packages | fzf --multi )
+                    ;;
+                A|all)
+                    echo "Select any package to view its info:"
+                    fzf_selection=$(all_packages_fzf)
+                    ;;
+                *)
+                    echo "usage: pm list [i|installed | a|available | A|all]" >&2
+                    return 1
+                    ;;
+            esac
+
+            if [[ $? -eq 0 && -n "$fzf_selection" ]]; then
+                local selected_package_name=$(echo "$fzf_selection" | head -n 1)
+                get_info "${selected_package_name%% *}"
+            elif [[ $? -ne 0 ]]; then
+                echo "fzf selection cancelled or failed."
+                return 1
+            else
+                echo "No package selected."
+                return 1
+            fi
+            ;;
+
+        I|info)
+            if [[ -n "$package_name" ]]; then
+                get_info "$package_name"
+            else
+                echo "Select a package to view info:"
+                local package_selected
+                package_selected=$(all_packages_fzf)
+                if [[ $? -ne 0 || -z "$package_selected" ]]; then
+                    echo "No package selected."
+                    return 1
+                fi
+                local first_package_name=$(echo "$package_selected" | head -n 1)
+                get_info "${first_package_name%% *}"
+            fi
+            ;;
+        p|prune)
+            if [[ "$PM" == "pacman" ]]; then
+                read -p "Are you sure you want to proceed? (y/N) " -n 1 -r
+                echo
+                if [[ ! "$REPLY" =~ ^[Yy]$ ]]; then
+                    echo "Pruning cancelled."
+                    return 0
+                fi
+                execute_action "prune" ""
+            elif [[ -n "$package_name" ]]; then
+                echo "Autoremove/prune is typically a system-wide operation."
+                echo "Trying to prune for package '$package_name', but it might not be supported by the underlying PM."
+                execute_action "prune" "$package_name"
+            else
+                echo "Performing system-wide prune (autoremove unneeded dependencies)..."
+                execute_action "prune" ""
+            fi
+            ;;
+        *)
+            echo "Usage: pm [action] [package_name]" >&2
+            echo "Actions:" >&2
+            echo "  install (i)   [package] - Install package(s)" >&2
+            echo "  uninstall (u,r,rm,remove) [package] - Remove package(s)" >&2
+            echo "  update (U,up) [package] - Update system or specific package (behavior varies by PM)" >&2
+            echo "  fetch (f)     - Refresh package lists" >&2
+            echo "  clean (c)     - Clean package cache" >&2
+            echo "  list (l,ls)   [i|installed | a|available | A|all] - List packages and show info after selection" >&2
+            echo "  info (I)      [package] - Show package information via direct argument or fzf selection" >&2
+            echo "  prune (p)     [package] - Remove unused dependencies / clean up" >&2
+            return 1
+            ;;
+    esac
+}
+
+_pm_completion() {
+    local cur prev actions
+
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+
+    actions=(
+        "install"
+        "uninstall"
+        "update"
+        "fetch"
+        "clean"
+        "list"
+        "info"
+        "prune"
+    )
+
+    list_sub_actions=(
+        "installed"
+        "available"
+        "all"
+    )
+
+    if [[ "$COMP_CWORD" -eq 1 ]]; then
+        COMPREPLY=( $(compgen -W "${actions[*]}" -- "$cur") )
+        return 0
+    fi
+
+    case "$prev" in
+        list|l|ls)
+            COMPREPLY=( $(compgen -W "${list_sub_actions[*]}" -- "$cur") )
+            return 0
+            ;;
+    esac
+
+    COMPREPLY=( $(compgen -W "" -- "$cur") )
+}
+complete -F _pm_completion pm
