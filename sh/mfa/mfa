@@ -1,0 +1,102 @@
+#!/bin/bash
+
+MFA_SECRETS_FILE="$HOME/sec/mfa.txt"
+
+touch "$MFA_SECRETS_FILE"
+
+mfa() {
+    if ! command -v oathtool &> /dev/null; then
+        echo "error: missing oathtool."
+        echo "info: try sudo apt-get install oathtool"
+        return 1
+    fi
+
+    local subcommand="$1"
+
+    case "$subcommand" in
+        add)
+            local name="$2"
+            local url="$3"
+
+            if [[ "$#" -ne 3 || -z "$name" || -z "$url" ]]; then
+                echo "usage: mfa add <name> <otpauth_url>"
+                return 1
+            fi
+
+            local secret
+            local type
+            
+            secret=$(echo "$url" | sed -n 's/.*secret=\([^&]*\).*/\1/p')
+            type=$(echo "$url" | sed -n 's/otpauth:\/\/\([^\/]*\).*/\1/p')
+
+            if [[ -z "$secret" || -z "$type" ]]; then
+                echo "error: Invalid otpauth URL. Could not extract secret or type."
+                return 1
+            fi
+
+            if grep -q "^$name:" "$MFA_SECRETS_FILE"; then
+                echo "error: entry '$name' already exists."
+                return 1
+            fi
+
+            echo "$name:$type:$secret" >> "$MFA_SECRETS_FILE"
+            echo "done: added entry '$name'."
+            ;;
+
+        rm)
+            local name="$2"
+            if [[ -z "$name" ]]; then
+                echo "Usage: mfa rm <name>"
+                return 1
+            fi
+            if ! grep -q "^$name:" "$MFA_SECRETS_FILE"; then
+                echo "Error: No entry found for '$name'."
+                return 1
+            fi
+
+            sed -i "/^$name:/d" "$MFA_SECRETS_FILE"
+            echo "Successfully removed '$name'."
+            ;;
+
+        list)
+            echo "Registered MFA entries:"
+            cut -d':' -f1 "$MFA_SECRETS_FILE" | while read -r entry; do
+                echo "- $entry"
+            done
+            ;;
+
+        "")
+            echo "Current OTP codes:"
+            while IFS=: read -r entry_name type secret; do
+                local otp_code
+                if [[ "$type" == "totp" ]]; then
+                    otp_code=$(oathtool --totp -b "$secret")
+                    echo "- $entry_name (TOTP): $otp_code"
+                elif [[ "$type" == "hotp" ]]; then
+                    echo "Warning: Cannot generate HOTP for '$entry_name'. HOTP requires a counter."
+                fi
+            done < "$MFA_SECRETS_FILE"
+            ;;
+
+        *)
+            local entry=$(grep "^$subcommand:" "$MFA_SECRETS_FILE")
+            if [[ -z "$entry" ]]; then
+                echo "error: No entry found for '$subcommand'."
+                echo "Use 'mfa list' to see all entries."
+                return 1
+            fi
+
+            local name type secret
+            IFS=: read -r name type secret <<< "$entry"
+            
+            if [[ "$type" == "totp" ]]; then
+                local otp_code=$(oathtool --totp -b "$secret")
+                echo "$otp_code" | xclip -selection clipboard
+            elif [[ "$type" == "hotp" ]]; then
+                echo "error: Cannot generate HOTP for '$name'. HOTP requires a counter."
+                return 1
+            fi
+            ;;
+    esac
+}
+
