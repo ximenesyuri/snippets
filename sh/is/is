@@ -1,14 +1,14 @@
 #! /bin/bash
 
-function is_hex_ {
+function is_hex {
     [[ "$1" =~ ^[0-9A-Fa-f]{6}$ ]]
 }
 
-function is_commit_() {
+function is_commit() {
     [[ "$1" =~ ^[0-9a-f]{40}$ ]]
 }
 
-function is_version_() {
+function is_version() {
     [[ "$1" =~ ^([<=>~^!]*[0-9]+(\.[0-9]+)*(\.[0-9]+)?(\.[0-9]+)?)$ ]]
 }
 

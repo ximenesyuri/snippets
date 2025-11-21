@@ -1,0 +1,13 @@
+services:
+  sync:
+    container_name: sync
+    build:
+      context: .
+      secrets: 
+        - ssh_key
+    command: [python, -m, services.sync.main]
+
+secrets:
+  ssh_key:
+    environment: SSH_PRIVATE_KEY
+

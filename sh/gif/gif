@@ -1,8 +1,6 @@
 #! /bin/bash
 
-# GIF FUNCTION
-    function gif(){
-## Auxiliary Functions
+function gif(){
 ### format the geometry
     function GIF_cropped_geometry(){
         IFS='x' read -ra dimensions_geometry <<< "$1"
